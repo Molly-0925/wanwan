@@ -491,28 +491,31 @@
     if (cfg.syncBackend === 'off') throw new Error('请先选择同步方式')
     var localSyncConfig = await getSyncConfigRows()
     var remoteUpdatedAt
+    function syncRows(exportedAt) {
+      return localSyncConfig.concat([
+        { key: 'syncLastDownloadAt', value: Date.now() },
+        { key: 'syncLastError', value: '' },
+        { key: 'syncRemoteUpdatedAt', value: exportedAt || Date.now() }
+      ])
+    }
     if (cfg.syncBackend === 'github') {
       var remote = await githubDownloadStream(cfg, options.onProgress)
       var importProgress = function(pct, text) {
         if (options.onProgress) options.onProgress(45 + Math.max(0, Number(pct) || 0) * 0.55, text)
       }
+      remoteUpdatedAt = remote.manifest.exportedAt
       await window.runWanWanStreamImport(remote.source, importProgress, {
         clearBeforeImport: true,
-        preserveConfigRows: localSyncConfig
+        preserveConfigRows: syncRows(remoteUpdatedAt)
       })
-      remoteUpdatedAt = remote.manifest.exportedAt
     } else {
       var data = await cloudflareDownload(cfg)
-      await window.importBackupData(data, options.onProgress, { clearBeforeImport: true })
-      if (localSyncConfig.length) await db.config.bulkPut(localSyncConfig)
       remoteUpdatedAt = data.exportedAt
+      await window.importBackupData(data, options.onProgress, {
+        clearBeforeImport: true,
+        preserveConfigRows: syncRows(remoteUpdatedAt)
+      })
     }
-    var now = Date.now()
-    await putConfig({
-      syncLastDownloadAt: now,
-      syncLastError: '',
-      syncRemoteUpdatedAt: remoteUpdatedAt || now
-    })
     return { exportedAt: remoteUpdatedAt }
   }
 

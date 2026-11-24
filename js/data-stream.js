@@ -6,7 +6,10 @@
     'moments', 'finance', 'offlineChats', 'stickers', 'stickerCategories', 'memories',
     'memoryRuns', 'callRecords', 'smsConversations', 'smsMessages', 'imageBlobs',
     'doorModules', 'doorResults', 'avgSaves', 'avgConfigs', 'mcpServers', 'mcpToolTraces']
-  var PROTECTED = ['wanwan_online_device_id']
+  var SETTINGS_EPOCH = 'wanwan_backup_settings_epoch'
+  var IMPORT_LOCK = 'wanwan-backup-import'
+  var RECOVERY_KEY = 'current'
+  var PROTECTED = ['wanwan_online_device_id', SETTINGS_EPOCH]
   var PROTECTED_PREFIXES = ['wanwan_mcp_oauth_', 'wanwan_mcp_secret_']
 
   function isProtectedKey(key) {
@@ -16,7 +19,7 @@
   }
 
   function Reader(source, progress) {
-    this.reader = source.stream().getReader(); this.decoder = new TextDecoder()
+    this.reader = source.stream().getReader(); this.decoder = new TextDecoder('utf-8', { fatal: true })
     this.buffer = ''; this.pos = 0; this.done = false; this.bytes = 0
     this.progress = progress; this.size = Number(source.size) || 0
   }
@@ -122,7 +125,7 @@
     return v
   }
 
-  async function put(name, rows) {
+  async function put(transaction, name, rows) {
     if (!rows.length || !db[name]) return
     if (name === 'config') rows = rows.filter(function(row) {
       return row && ['memoryEmbeddingStatus', 'memoryLastError'].indexOf(String(row.key)) < 0
@@ -132,7 +135,7 @@
       if (!Number.isFinite(source) || source <= 0 || (Number.isFinite(created) && created > 0 && source === created)) row.sourceAt = null
       return row
     })
-    if (rows.length) await db[name].bulkPut(rows)
+    if (rows.length) await transaction.table(name).bulkPut(rows)
   }
 
   function databaseError(err) {
@@ -145,10 +148,10 @@
     return name + '：' + message
   }
 
-  async function array(input, name, progress, options) {
+  async function array(input, name, progress, options, transaction) {
     await input.expect('['); await input.space()
     if (options.clearBeforeImport && db[name]) {
-      try { await db[name].clear() } catch (err) { throw new Error('清理 ' + name + ' 失败：' + databaseError(err)) }
+      try { await transaction.table(name).clear() } catch (err) { throw new Error('清理 ' + name + ' 失败：' + databaseError(err)) }
     }
     if (await input.peek() === ']') { await input.next(); return }
     var rows = [], count = 0, limit = name === 'imageBlobs' ? 1 : 200
@@ -156,76 +159,179 @@
       var encoded = await value(input)
       rows.push(hydrate(JSON.parse(encoded.raw), encoded.blobs)); count++
       if (rows.length >= limit) {
-        try { await put(name, rows) } catch (err) {
+        try { await put(transaction, name, rows) } catch (err) {
           throw new Error('写入 ' + name + ' 失败（第 ' + Math.max(1, count - rows.length + 1) + '-' + count + ' 条）：' + databaseError(err))
         }
-        rows = []; progress(input.size ? Math.min(98, input.bytes / input.size * 100) : 0, '正在导入 ' + name + '（' + count + ' 条）')
-        await new Promise(function(resolve) { setTimeout(resolve, 0) })
+        rows = []; progress(input.size ? Math.min(90, input.bytes / input.size * 90) : 0, '暂存 ' + name + '（' + count + ' 条）')
       }
       await input.space(); var separator = await input.next()
       if (separator === ']') break
       if (separator !== ',') throw new Error(name + ' 数组格式错误')
     }
-    try { await put(name, rows) } catch (err) {
+    try { await put(transaction, name, rows) } catch (err) {
       throw new Error('写入 ' + name + ' 失败（共 ' + count + ' 条）：' + databaseError(err))
     }
+  }
+
+  function withImportLock(work) {
+    if (!navigator.locks) throw new Error('当前浏览器不支持安全的备份恢复，请使用新版浏览器')
+    return navigator.locks.request(IMPORT_LOCK, work)
+  }
+
+  function makeSettingsPlan(local, options) {
+    if (local != null && (typeof local !== 'object' || Array.isArray(local))) {
+      throw new Error('备份的本地设置格式无效')
+    }
+    var keys = new Set(Object.keys(local || {}))
+    if (options.clearBeforeImport) Object.keys(localStorage).forEach(function(key) { keys.add(key) })
+    var changes = []
+    keys.forEach(function(key) {
+      if (isProtectedKey(key)) return
+      var oldValue = localStorage.getItem(key)
+      var newValue = local && Object.prototype.hasOwnProperty.call(local, key) ? String(local[key]) : null
+      if (oldValue !== newValue) changes.push({ key: key, oldValue: oldValue, newValue: newValue })
+    })
+    return changes
+  }
+
+  function applySettingsPlan(plan, committed) {
+    var valueName = committed ? 'newValue' : 'oldValue'
+    var epoch = plan.id + (committed ? ':committed' : ':rolled-back')
+    if (localStorage.getItem(SETTINGS_EPOCH) === epoch) return
+    plan.changes.forEach(function(change) {
+      if (change[valueName] === null) localStorage.removeItem(change.key)
+    })
+    plan.changes.forEach(function(change) {
+      var value = change[valueName]
+      if (value !== null && localStorage.getItem(change.key) !== value) localStorage.setItem(change.key, value)
+    })
+    localStorage.setItem(SETTINGS_EPOCH, epoch)
+  }
+
+  async function reconcileBackupImport() {
+    var plan = await db.backupImportRecovery.get(RECOVERY_KEY)
+    if (plan) applySettingsPlan(plan, plan.committed)
+    await db.backupImportStage.clear()
+  }
+
+  window.recoverWanWanBackupImport = async function() {
+    if (!await db.backupImportRecovery.get(RECOVERY_KEY) && !await db.backupImportStage.count()) return
+    await withImportLock(reconcileBackupImport)
+  }
+
+  function stagingTable(name, seen) {
+    return {
+      clear: function() { return db.backupImportStage.add({ name: name }) },
+      bulkPut: function(rows) {
+        if (!Array.isArray(rows)) throw new Error('备份表结构无效：' + name)
+        if (seen) {
+          var ids = seen.get(name)
+          if (!ids) { ids = new Set(); seen.set(name, ids) }
+          var key = db[name].schema.primKey.keyPath
+          rows.forEach(function(row) {
+            var id = row && row[key]
+            if (typeof id !== 'string' && !(typeof id === 'number' && Number.isFinite(id))) {
+              throw new Error('备份记录缺少有效主键：' + name)
+            }
+            if (ids.has(id)) throw new Error('备份记录主键重复：' + name)
+            ids.add(id)
+          })
+        }
+        return db.backupImportStage.add({ name: name, rows: rows })
+      }
+    }
+  }
+
+  window.runWanWanBackupTransaction = async function(work, options) {
+    options = options || {}
+    await withImportLock(async function() {
+      await reconcileBackupImport()
+      var snapshot = await window.readWanWanBackupWriteVersion(db.backupImportRecovery)
+      var plan
+      try {
+        // Validate and stage the whole file before touching any live table.
+        var seen = new Map()
+        var local = await work({ table: function(name) { return stagingTable(name, seen) } })
+        if (Array.isArray(options.preserveConfigRows) && options.preserveConfigRows.length && db.config) {
+          await stagingTable('config').bulkPut(options.preserveConfigRows)
+        }
+        plan = { key: RECOVERY_KEY, id: crypto.randomUUID(), committed: false, changes: makeSettingsPlan(local, options) }
+        await db.backupImportRecovery.put(plan)
+        var tables = TABLES.filter(function(name) { return !!db[name] }).map(function(name) { return db[name] })
+        tables.push(db.backupImportStage, db.backupImportRecovery)
+        await db.transaction('rw', tables, async function(transaction) {
+          await window.authorizeWanWanBackupCommit(transaction, snapshot, plan.id)
+          var stage = transaction.table('backupImportStage')
+          var cursor = 0
+          while (true) {
+            var entry = await stage.where(':id').above(cursor).first()
+            if (!entry) break
+            cursor = entry.id
+            var target = transaction.table(entry.name)
+            if (entry.rows) await target.bulkPut(entry.rows)
+            else await target.clear()
+          }
+          applySettingsPlan(plan, true)
+          await transaction.table('backupImportRecovery').put(Object.assign({}, plan, { committed: true }))
+          await stage.clear()
+        })
+      } catch (error) {
+        try { await reconcileBackupImport() } catch (recoveryError) {
+          throw new Error('备份恢复需要重新启动应用后重试', { cause: recoveryError })
+        }
+        throw error
+      }
+    })
+  }
+
+  window.clearWanWanBackupState = function(work) {
+    return withImportLock(async function() {
+      await reconcileBackupImport()
+      // Let the caller clear its live rows and marker under the same lock.
+      await db.backupImportRecovery.delete(RECOVERY_KEY)
+      await work()
+    })
   }
 
   window.runWanWanStreamImport = async function(source, progress, options) {
     if (!source || !source.stream || !window.TextDecoder) throw new Error('当前浏览器不支持流式导入')
     progress = typeof progress === 'function' ? progress : function() {}
     options = options || {}
-    var protectedValues = {}
-    Object.keys(localStorage).forEach(function(key) {
-      if (isProtectedKey(key)) protectedValues[key] = localStorage.getItem(key)
-    })
     var input = new Reader(source, progress), version = null, appName = null, local = null
-    var importFailed = false
+    var fields = new Set()
     try {
-      await input.expect('{')
-      while (true) {
-        await input.space(); if (await input.peek() === '}') { await input.next(); break }
-        var key = (await stringToken(input)).value; await input.expect(':')
-        if (TABLES.indexOf(key) >= 0) {
-          if (version !== 1 || appName !== '弯弯') throw new Error('备份头部无效或字段顺序不受支持')
-          await array(input, key, progress, options)
-        } else {
-          var encoded = await value(input), decoded = hydrate(JSON.parse(encoded.raw), encoded.blobs)
-          if (key === 'version') version = decoded
-          else if (key === 'appName') appName = decoded
-          else if (key === 'localStorage') local = decoded
+      await window.runWanWanBackupTransaction(async function(transaction) {
+        await input.expect('{')
+        while (true) {
+          await input.space(); if (await input.peek() === '}') { await input.next(); break }
+          var key = (await stringToken(input)).value; await input.expect(':')
+          if (fields.has(key)) throw new Error('备份包含重复字段：' + key)
+          fields.add(key)
+          if (TABLES.indexOf(key) >= 0) {
+            if (version !== 1 || appName !== '弯弯') throw new Error('备份头部无效或字段顺序不受支持')
+            await array(input, key, progress, options, transaction)
+          } else {
+            var encoded = await value(input), decoded = hydrate(JSON.parse(encoded.raw), encoded.blobs)
+            if (key === 'version') version = decoded
+            else if (key === 'appName') appName = decoded
+            else if (key === 'localStorage') local = decoded
+          }
+          await input.space(); var separator = await input.next()
+          if (separator === '}') break
+          if (separator !== ',') throw new Error('备份顶层格式错误')
+          await input.space()
+          if (await input.peek() === '}') throw new Error('备份顶层存在多余的逗号')
         }
-        await input.space(); var separator = await input.next()
-        if (separator === '}') break
-        if (separator !== ',') throw new Error('备份顶层格式错误')
-      }
-      await input.space(); if (await input.peek()) throw new Error('JSON结尾存在额外内容')
-      if (version !== 1 || appName !== '弯弯') throw new Error('不支持的备份格式')
-      if (options.clearBeforeImport) localStorage.clear()
-      if (local) Object.keys(local).forEach(function(key) {
-        if (!isProtectedKey(key)) localStorage.setItem(key, local[key])
-      })
-      Object.keys(protectedValues).forEach(function(key) {
-        localStorage.setItem(key, protectedValues[key])
-      })
-      progress(100, '导入完成！')
-    } catch (err) {
-      importFailed = true
-      throw err
+        await input.space(); if (await input.peek()) throw new Error('JSON结尾存在额外内容')
+        if (version !== 1 || appName !== '弯弯') throw new Error('不支持的备份格式')
+        return local
+      }, options)
+    } catch (error) {
+      input.reader.cancel(error).catch(function() {})
+      throw error
     } finally {
-      PROTECTED.forEach(function(key) {
-        if (Object.prototype.hasOwnProperty.call(protectedValues, key)) localStorage.setItem(key, protectedValues[key])
-        else localStorage.removeItem(key)
-      })
-      Object.keys(protectedValues).forEach(function(key) {
-        localStorage.setItem(key, protectedValues[key])
-      })
-      if (Array.isArray(options.preserveConfigRows) && options.preserveConfigRows.length && db.config) {
-        try { await db.config.bulkPut(options.preserveConfigRows) } catch (preserveError) {
-          if (!importFailed) throw preserveError
-          console.warn('[data-import] 恢复本机同步设置失败', preserveError)
-        }
-      }
+      input.reader.releaseLock()
     }
+    progress(100, '导入完成！')
   }
 })()

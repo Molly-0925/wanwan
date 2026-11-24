@@ -1,0 +1,26 @@
+name: WANWAN DEPLOY 02 multitab gate
+on:
+  push:
+    branches: [wanwan-deploy-02-multitab-candidate]
+permissions:
+  contents: read
+jobs:
+  multitab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-save --no-package-lock dexie@4.4.3 playwright@1.56.1
+      - run: node .github/tests/import-multitab.mjs
+      - run: node .github/tests/import-atomicity.mjs
+      - run: node .github/tests/import-crash.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wanwan-multitab-results
+          path: |
+            wanwan-multitab-results.json
+            wanwan-crash-results.json

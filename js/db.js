@@ -335,6 +335,11 @@ function initDB() {
     mcpServers:        '&id, name, enabled, updatedAt',
     mcpToolTraces:     '++id, scope, conversationId, [scope+conversationId], turnId, createdAt'
   })
+  db.version(16).stores({
+    backupImportStage: '++id',
+    backupImportRecovery: 'key'
+  })
+  window.installWanWanBackupWriteGuard(db)
   installWanWanDBRecovery()
 }
 
