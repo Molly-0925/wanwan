@@ -16,11 +16,11 @@ const scripts = new Map(await Promise.all([
 ].map(async ([url, path]) => [url, await readFile(path)])));
 const server = createServer((req, res) => {
   if (scripts.has(req.url)) {
-    res.writeHead(200, { 'Content-Type': 'text/javascript' });
+    res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
     res.end(scripts.get(req.url));
   } else {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<!doctype html><script src="/dexie.js"></script><script src="/data.js"></script><script src="/data-stream.js"></script>');
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<!doctype html><meta charset="utf-8"><script src="/dexie.js"></script><script src="/data.js"></script><script src="/data-stream.js"></script>');
   }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

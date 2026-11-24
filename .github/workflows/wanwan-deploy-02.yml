@@ -14,6 +14,12 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --no-save --no-package-lock dexie@4.4.3 playwright@1.56.1
+      - name: Probe production HTTPS without login
+        run: |
+          for path in / /manifest.json /.well-known/assetlinks.json; do
+            printf '%s ' "$path"
+            curl --silent --show-error --max-time 15 -o /dev/null -w 'HTTP %{http_code} | %{content_type} | redirect %{redirect_url}\n' "https://molly-wanwan.netlify.app$path" || true
+          done
       - run: node .github/tests/import-crash.mjs
       - uses: actions/upload-artifact@v4
         if: always()
