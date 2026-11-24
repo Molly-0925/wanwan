@@ -63,7 +63,7 @@ try {
         },
       };
     }
-    await rejects(() => runWanWanStreamImport(sourceWithDelayedReads(bytes)), /key|写入 messages|DataError/i);
+    await rejects(() => runWanWanStreamImport(sourceWithDelayedReads(bytes)), /主键|key|写入 messages|DataError/i);
     await original();
     const quotaData = {
       version: 1, appName: '弯弯',

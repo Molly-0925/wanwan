@@ -19,7 +19,7 @@
   }
 
   function Reader(source, progress) {
-    this.reader = source.stream().getReader(); this.decoder = new TextDecoder()
+    this.reader = source.stream().getReader(); this.decoder = new TextDecoder('utf-8', { fatal: true })
     this.buffer = ''; this.pos = 0; this.done = false; this.bytes = 0
     this.progress = progress; this.size = Number(source.size) || 0
   }
@@ -219,10 +219,26 @@
     await withImportLock(reconcileBackupImport)
   }
 
-  function stagingTable(name) {
+  function stagingTable(name, seen) {
     return {
       clear: function() { return db.backupImportStage.add({ name: name }) },
-      bulkPut: function(rows) { return db.backupImportStage.add({ name: name, rows: rows }) }
+      bulkPut: function(rows) {
+        if (!Array.isArray(rows)) throw new Error('备份表结构无效：' + name)
+        if (seen) {
+          var ids = seen.get(name)
+          if (!ids) { ids = new Set(); seen.set(name, ids) }
+          var key = db[name].schema.primKey.keyPath
+          rows.forEach(function(row) {
+            var id = row && row[key]
+            if (typeof id !== 'string' && !(typeof id === 'number' && Number.isFinite(id))) {
+              throw new Error('备份记录缺少有效主键：' + name)
+            }
+            if (ids.has(id)) throw new Error('备份记录主键重复：' + name)
+            ids.add(id)
+          })
+        }
+        return db.backupImportStage.add({ name: name, rows: rows })
+      }
     }
   }
 
@@ -234,7 +250,8 @@
       var plan
       try {
         // Validate and stage the whole file before touching any live table.
-        var local = await work({ table: stagingTable })
+        var seen = new Map()
+        var local = await work({ table: function(name) { return stagingTable(name, seen) } })
         if (Array.isArray(options.preserveConfigRows) && options.preserveConfigRows.length && db.config) {
           await stagingTable('config').bulkPut(options.preserveConfigRows)
         }
@@ -281,12 +298,15 @@
     progress = typeof progress === 'function' ? progress : function() {}
     options = options || {}
     var input = new Reader(source, progress), version = null, appName = null, local = null
+    var fields = new Set()
     try {
       await window.runWanWanBackupTransaction(async function(transaction) {
         await input.expect('{')
         while (true) {
           await input.space(); if (await input.peek() === '}') { await input.next(); break }
           var key = (await stringToken(input)).value; await input.expect(':')
+          if (fields.has(key)) throw new Error('备份包含重复字段：' + key)
+          fields.add(key)
           if (TABLES.indexOf(key) >= 0) {
             if (version !== 1 || appName !== '弯弯') throw new Error('备份头部无效或字段顺序不受支持')
             await array(input, key, progress, options, transaction)
@@ -299,6 +319,8 @@
           await input.space(); var separator = await input.next()
           if (separator === '}') break
           if (separator !== ',') throw new Error('备份顶层格式错误')
+          await input.space()
+          if (await input.peek() === '}') throw new Error('备份顶层存在多余的逗号')
         }
         await input.space(); if (await input.peek()) throw new Error('JSON结尾存在额外内容')
         if (version !== 1 || appName !== '弯弯') throw new Error('不支持的备份格式')
