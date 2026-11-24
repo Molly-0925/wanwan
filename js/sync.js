@@ -503,8 +503,10 @@
       remoteUpdatedAt = remote.manifest.exportedAt
     } else {
       var data = await cloudflareDownload(cfg)
-      await window.importBackupData(data, options.onProgress, { clearBeforeImport: true })
-      if (localSyncConfig.length) await db.config.bulkPut(localSyncConfig)
+      await window.importBackupData(data, options.onProgress, {
+        clearBeforeImport: true,
+        preserveConfigRows: localSyncConfig
+      })
       remoteUpdatedAt = data.exportedAt
     }
     var now = Date.now()

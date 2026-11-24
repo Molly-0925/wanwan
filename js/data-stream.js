@@ -22,7 +22,7 @@
   }
   Reader.prototype.fill = async function() {
     if (this.pos < this.buffer.length || this.done) return
-    var r = await this.reader.read(); this.pos = 0
+    var r = await Dexie.waitFor(this.reader.read()); this.pos = 0
     if (r.done) { this.done = true; this.buffer = this.decoder.decode() }
     else {
       this.bytes += r.value.byteLength; this.buffer = this.decoder.decode(r.value, { stream: true })
@@ -160,7 +160,6 @@
           throw new Error('写入 ' + name + ' 失败（第 ' + Math.max(1, count - rows.length + 1) + '-' + count + ' 条）：' + databaseError(err))
         }
         rows = []; progress(input.size ? Math.min(98, input.bytes / input.size * 100) : 0, '正在导入 ' + name + '（' + count + ' 条）')
-        await new Promise(function(resolve) { setTimeout(resolve, 0) })
       }
       await input.space(); var separator = await input.next()
       if (separator === ']') break
@@ -171,61 +170,78 @@
     }
   }
 
+  // IndexedDB can roll back all tables together. Track the previous values
+  // for localStorage, whose API is synchronous and outside that transaction.
+  window.runWanWanBackupTransaction = async function(work, options) {
+    options = options || {}
+    var tables = TABLES.filter(function(name) { return !!db[name] }).map(function(name) { return db[name] })
+    var previous = new Map()
+    try {
+      await db.transaction('rw', tables, async function() {
+        var local = await work()
+        if (Array.isArray(options.preserveConfigRows) && options.preserveConfigRows.length && db.config) {
+          await db.config.bulkPut(options.preserveConfigRows)
+        }
+        var keys = new Set(Object.keys(local || {}))
+        if (options.clearBeforeImport) Object.keys(localStorage).forEach(function(key) { keys.add(key) })
+        keys.forEach(function(key) {
+          if (isProtectedKey(key)) return
+          var old = localStorage.getItem(key)
+          if (local && Object.prototype.hasOwnProperty.call(local, key)) {
+            var next = String(local[key])
+            if (next === old) return
+            localStorage.setItem(key, next)
+          } else {
+            if (old === null) return
+            localStorage.removeItem(key)
+          }
+          previous.set(key, old)
+        })
+      })
+    } catch (error) {
+      // Remove newly added values first, freeing space before restoring old values.
+      previous.forEach(function(value, key) { localStorage.removeItem(key) })
+      previous.forEach(function(value, key) {
+        if (value !== null) localStorage.setItem(key, value)
+      })
+      throw error
+    }
+  }
+
   window.runWanWanStreamImport = async function(source, progress, options) {
     if (!source || !source.stream || !window.TextDecoder) throw new Error('当前浏览器不支持流式导入')
     progress = typeof progress === 'function' ? progress : function() {}
     options = options || {}
-    var protectedValues = {}
-    Object.keys(localStorage).forEach(function(key) {
-      if (isProtectedKey(key)) protectedValues[key] = localStorage.getItem(key)
-    })
     var input = new Reader(source, progress), version = null, appName = null, local = null
-    var importFailed = false
     try {
-      await input.expect('{')
-      while (true) {
-        await input.space(); if (await input.peek() === '}') { await input.next(); break }
-        var key = (await stringToken(input)).value; await input.expect(':')
-        if (TABLES.indexOf(key) >= 0) {
-          if (version !== 1 || appName !== '弯弯') throw new Error('备份头部无效或字段顺序不受支持')
-          await array(input, key, progress, options)
-        } else {
-          var encoded = await value(input), decoded = hydrate(JSON.parse(encoded.raw), encoded.blobs)
-          if (key === 'version') version = decoded
-          else if (key === 'appName') appName = decoded
-          else if (key === 'localStorage') local = decoded
+      await window.runWanWanBackupTransaction(async function() {
+        await input.expect('{')
+        while (true) {
+          await input.space(); if (await input.peek() === '}') { await input.next(); break }
+          var key = (await stringToken(input)).value; await input.expect(':')
+          if (TABLES.indexOf(key) >= 0) {
+            if (version !== 1 || appName !== '弯弯') throw new Error('备份头部无效或字段顺序不受支持')
+            await array(input, key, progress, options)
+          } else {
+            var encoded = await value(input), decoded = hydrate(JSON.parse(encoded.raw), encoded.blobs)
+            if (key === 'version') version = decoded
+            else if (key === 'appName') appName = decoded
+            else if (key === 'localStorage') local = decoded
+          }
+          await input.space(); var separator = await input.next()
+          if (separator === '}') break
+          if (separator !== ',') throw new Error('备份顶层格式错误')
         }
-        await input.space(); var separator = await input.next()
-        if (separator === '}') break
-        if (separator !== ',') throw new Error('备份顶层格式错误')
-      }
-      await input.space(); if (await input.peek()) throw new Error('JSON结尾存在额外内容')
-      if (version !== 1 || appName !== '弯弯') throw new Error('不支持的备份格式')
-      if (options.clearBeforeImport) localStorage.clear()
-      if (local) Object.keys(local).forEach(function(key) {
-        if (!isProtectedKey(key)) localStorage.setItem(key, local[key])
-      })
-      Object.keys(protectedValues).forEach(function(key) {
-        localStorage.setItem(key, protectedValues[key])
-      })
-      progress(100, '导入完成！')
-    } catch (err) {
-      importFailed = true
-      throw err
+        await input.space(); if (await input.peek()) throw new Error('JSON结尾存在额外内容')
+        if (version !== 1 || appName !== '弯弯') throw new Error('不支持的备份格式')
+        return local
+      }, options)
+    } catch (error) {
+      input.reader.cancel(error).catch(function() {})
+      throw error
     } finally {
-      PROTECTED.forEach(function(key) {
-        if (Object.prototype.hasOwnProperty.call(protectedValues, key)) localStorage.setItem(key, protectedValues[key])
-        else localStorage.removeItem(key)
-      })
-      Object.keys(protectedValues).forEach(function(key) {
-        localStorage.setItem(key, protectedValues[key])
-      })
-      if (Array.isArray(options.preserveConfigRows) && options.preserveConfigRows.length && db.config) {
-        try { await db.config.bulkPut(options.preserveConfigRows) } catch (preserveError) {
-          if (!importFailed) throw preserveError
-          console.warn('[data-import] 恢复本机同步设置失败', preserveError)
-        }
-      }
+      input.reader.releaseLock()
     }
+    progress(100, '导入完成！')
   }
 })()
