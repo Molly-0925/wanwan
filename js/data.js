@@ -1,7 +1,7 @@
 // data.js — 数据管理模块（导入/导出/清除）
 // 依赖：db.js 必须先加载
 
-var PROTECTED_LOCAL_STORAGE_KEYS = ['wanwan_online_device_id']
+var PROTECTED_LOCAL_STORAGE_KEYS = ['wanwan_online_device_id', 'wanwan_backup_settings_epoch']
 var PROTECTED_LOCAL_STORAGE_PREFIXES = ['wanwan_mcp_oauth_', 'wanwan_mcp_secret_']
 
 function isProtectedLocalStorageKey(key) {
@@ -1392,6 +1392,8 @@ async function clearAllData() {
     'stickers', 'stickerCategories', 'memories', 'memoryRuns',
     'callRecords', 'smsConversations', 'smsMessages', 'imageBlobs',
     'doorModules', 'doorResults', 'avgSaves', 'avgConfigs', 'mcpServers', 'mcpToolTraces']
-  await Promise.all(tables.map(function(t) { return db[t] ? db[t].clear() : Promise.resolve() }))
-  localStorage.clear()
+  await window.clearWanWanBackupState(async function() {
+    await Promise.all(tables.map(function(t) { return db[t] ? db[t].clear() : Promise.resolve() }))
+    localStorage.clear()
+  })
 }

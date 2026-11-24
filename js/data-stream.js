@@ -6,7 +6,10 @@
     'moments', 'finance', 'offlineChats', 'stickers', 'stickerCategories', 'memories',
     'memoryRuns', 'callRecords', 'smsConversations', 'smsMessages', 'imageBlobs',
     'doorModules', 'doorResults', 'avgSaves', 'avgConfigs', 'mcpServers', 'mcpToolTraces']
-  var PROTECTED = ['wanwan_online_device_id']
+  var SETTINGS_EPOCH = 'wanwan_backup_settings_epoch'
+  var IMPORT_LOCK = 'wanwan-backup-import'
+  var RECOVERY_KEY = 'current'
+  var PROTECTED = ['wanwan_online_device_id', SETTINGS_EPOCH]
   var PROTECTED_PREFIXES = ['wanwan_mcp_oauth_', 'wanwan_mcp_secret_']
 
   function isProtectedKey(key) {
@@ -22,7 +25,7 @@
   }
   Reader.prototype.fill = async function() {
     if (this.pos < this.buffer.length || this.done) return
-    var r = await this.transaction.waitFor(this.reader.read()); this.pos = 0
+    var r = await this.reader.read(); this.pos = 0
     if (r.done) { this.done = true; this.buffer = this.decoder.decode() }
     else {
       this.bytes += r.value.byteLength; this.buffer = this.decoder.decode(r.value, { stream: true })
@@ -159,7 +162,7 @@
         try { await put(transaction, name, rows) } catch (err) {
           throw new Error('写入 ' + name + ' 失败（第 ' + Math.max(1, count - rows.length + 1) + '-' + count + ' 条）：' + databaseError(err))
         }
-        rows = []; progress(input.size ? Math.min(98, input.bytes / input.size * 100) : 0, '正在导入 ' + name + '（' + count + ' 条）')
+        rows = []; progress(input.size ? Math.min(90, input.bytes / input.size * 90) : 0, '暂存 ' + name + '（' + count + ' 条）')
       }
       await input.space(); var separator = await input.next()
       if (separator === ']') break
@@ -170,42 +173,105 @@
     }
   }
 
-  // IndexedDB can roll back all tables together. Track the previous values
-  // for localStorage, whose API is synchronous and outside that transaction.
+  function withImportLock(work) {
+    if (!navigator.locks) throw new Error('当前浏览器不支持安全的备份恢复，请使用新版浏览器')
+    return navigator.locks.request(IMPORT_LOCK, work)
+  }
+
+  function makeSettingsPlan(local, options) {
+    if (local != null && (typeof local !== 'object' || Array.isArray(local))) {
+      throw new Error('备份的本地设置格式无效')
+    }
+    var keys = new Set(Object.keys(local || {}))
+    if (options.clearBeforeImport) Object.keys(localStorage).forEach(function(key) { keys.add(key) })
+    var changes = []
+    keys.forEach(function(key) {
+      if (isProtectedKey(key)) return
+      var oldValue = localStorage.getItem(key)
+      var newValue = local && Object.prototype.hasOwnProperty.call(local, key) ? String(local[key]) : null
+      if (oldValue !== newValue) changes.push({ key: key, oldValue: oldValue, newValue: newValue })
+    })
+    return changes
+  }
+
+  function applySettingsPlan(plan, committed) {
+    var valueName = committed ? 'newValue' : 'oldValue'
+    var epoch = plan.id + (committed ? ':committed' : ':rolled-back')
+    if (localStorage.getItem(SETTINGS_EPOCH) === epoch) return
+    plan.changes.forEach(function(change) {
+      if (change[valueName] === null) localStorage.removeItem(change.key)
+    })
+    plan.changes.forEach(function(change) {
+      var value = change[valueName]
+      if (value !== null && localStorage.getItem(change.key) !== value) localStorage.setItem(change.key, value)
+    })
+    localStorage.setItem(SETTINGS_EPOCH, epoch)
+  }
+
+  async function reconcileBackupImport() {
+    var plan = await db.backupImportRecovery.get(RECOVERY_KEY)
+    if (plan) applySettingsPlan(plan, plan.committed)
+    await db.backupImportStage.clear()
+  }
+
+  window.recoverWanWanBackupImport = async function() {
+    if (!await db.backupImportRecovery.get(RECOVERY_KEY) && !await db.backupImportStage.count()) return
+    await withImportLock(reconcileBackupImport)
+  }
+
+  function stagingTable(name) {
+    return {
+      clear: function() { return db.backupImportStage.add({ name: name }) },
+      bulkPut: function(rows) { return db.backupImportStage.add({ name: name, rows: rows }) }
+    }
+  }
+
   window.runWanWanBackupTransaction = async function(work, options) {
     options = options || {}
-    var tables = TABLES.filter(function(name) { return !!db[name] }).map(function(name) { return db[name] })
-    var previous = new Map()
-    try {
-      await db.transaction('rw', tables, async function(transaction) {
-        var local = await work(transaction)
+    await withImportLock(async function() {
+      await reconcileBackupImport()
+      var plan
+      try {
+        // Validate and stage the whole file before touching any live table.
+        var local = await work({ table: stagingTable })
         if (Array.isArray(options.preserveConfigRows) && options.preserveConfigRows.length && db.config) {
-          await transaction.table('config').bulkPut(options.preserveConfigRows)
+          await stagingTable('config').bulkPut(options.preserveConfigRows)
         }
-        var keys = new Set(Object.keys(local || {}))
-        if (options.clearBeforeImport) Object.keys(localStorage).forEach(function(key) { keys.add(key) })
-        keys.forEach(function(key) {
-          if (isProtectedKey(key)) return
-          var old = localStorage.getItem(key)
-          if (local && Object.prototype.hasOwnProperty.call(local, key)) {
-            var next = String(local[key])
-            if (next === old) return
-            localStorage.setItem(key, next)
-          } else {
-            if (old === null) return
-            localStorage.removeItem(key)
+        plan = { key: RECOVERY_KEY, id: crypto.randomUUID(), committed: false, changes: makeSettingsPlan(local, options) }
+        await db.backupImportRecovery.put(plan)
+        var tables = TABLES.filter(function(name) { return !!db[name] }).map(function(name) { return db[name] })
+        tables.push(db.backupImportStage, db.backupImportRecovery)
+        await db.transaction('rw', tables, async function(transaction) {
+          var stage = transaction.table('backupImportStage')
+          var cursor = 0
+          while (true) {
+            var entry = await stage.where(':id').above(cursor).first()
+            if (!entry) break
+            cursor = entry.id
+            var target = transaction.table(entry.name)
+            if (entry.rows) await target.bulkPut(entry.rows)
+            else await target.clear()
           }
-          previous.set(key, old)
+          applySettingsPlan(plan, true)
+          await transaction.table('backupImportRecovery').put(Object.assign({}, plan, { committed: true }))
+          await stage.clear()
         })
-      })
-    } catch (error) {
-      // Remove newly added values first, freeing space before restoring old values.
-      previous.forEach(function(value, key) { localStorage.removeItem(key) })
-      previous.forEach(function(value, key) {
-        if (value !== null) localStorage.setItem(key, value)
-      })
-      throw error
-    }
+      } catch (error) {
+        try { await reconcileBackupImport() } catch (recoveryError) {
+          throw new Error('备份恢复需要重新启动应用后重试', { cause: recoveryError })
+        }
+        throw error
+      }
+    })
+  }
+
+  window.clearWanWanBackupState = function(work) {
+    return withImportLock(async function() {
+      await reconcileBackupImport()
+      // Let the caller clear its live rows and marker under the same lock.
+      await db.backupImportRecovery.clear()
+      await work()
+    })
   }
 
   window.runWanWanStreamImport = async function(source, progress, options) {
@@ -215,7 +281,6 @@
     var input = new Reader(source, progress), version = null, appName = null, local = null
     try {
       await window.runWanWanBackupTransaction(async function(transaction) {
-        input.transaction = transaction
         await input.expect('{')
         while (true) {
           await input.space(); if (await input.peek() === '}') { await input.next(); break }

@@ -60,12 +60,13 @@ async function open(page) {
   await page.goto(url);
   await page.evaluate(async () => {
     window.db = new Dexie('wanwan-crash-audit');
-    db.version(1).stores({config:'key', characters:'id', chats:'id', messages:'id', imageBlobs:'id'});
+    db.version(1).stores({config:'key', characters:'id', chats:'id', messages:'id', imageBlobs:'id',backupImportStage:'++id',backupImportRecovery:'key'});
     await db.open();
+    await recoverWanWanBackupImport();
   });
 }
 const cases = [
-  ['before-start','kill'], ['first-write','kill'], ['first-batch','kill'],
+  ['before-start','kill'], ['parsed-staged','kill'], ['first-write','kill'], ['first-batch','kill'],
   ['multiple-batches','kill'], ['last-batch','kill'], ['before-commit','kill'],
   ['settings-before-commit','kill'], ['post-commit-pre-feedback','kill'],
   ['first-batch','reload'], ['multiple-batches','close'],
@@ -94,25 +95,45 @@ for (const [phase, termination] of cases) {
       let active;
       const hold = () => new Promise(() => {});
       const signal = () => console.log('WANWAN_PAUSE ' + phase);
+      const prepare = db.backupImportRecovery.put.bind(db.backupImportRecovery);
+      if (phase === 'parsed-staged') {
+        db.backupImportRecovery.put = async (...args) => {
+          signal();
+          await hold();
+          return prepare(...args);
+        };
+      }
       const orig = db.transaction.bind(db);
       db.transaction = async (mode, tables, callback) => {
         const result = await orig(mode, tables, async tx => {
           active = tx;
-          if (phase === 'first-write') {
-            const table = tx.table.bind(tx);
-            tx.table = name => {
-              const bound = table(name);
-              if (name === 'characters') {
-                const write = bound.bulkPut.bind(bound);
-                bound.bulkPut = rows => {
-                  const request = write(rows);
+          let messagesWritten = 0;
+          const table = tx.table.bind(tx);
+          tx.table = name => {
+            const bound = table(name);
+            if (name === 'characters' || name === 'messages') {
+              const write = bound.bulkPut.bind(bound);
+              bound.bulkPut = rows => {
+                const request = write(rows);
+                if (name === 'messages') messagesWritten += rows.length;
+                const limit = {'first-batch':200,'multiple-batches':400,'last-batch':601}[phase];
+                if ((phase === 'first-write' && name === 'characters') ||
+                    (name === 'messages' && messagesWritten === limit)) {
                   signal();
                   return tx.waitFor(request.then(hold));
-                };
-              }
-              return bound;
-            };
-          }
+                }
+                return request;
+              };
+            }
+            if (phase === 'before-commit' && name === 'backupImportRecovery') {
+              const write = bound.put.bind(bound);
+              bound.put = record => {
+                signal();
+                return tx.waitFor(hold()).then(() => write(record));
+              };
+            }
+            return bound;
+          };
           const result = await callback(tx);
           if (phase === 'settings-before-commit') {
             signal();
@@ -133,22 +154,8 @@ for (const [phase, termination] of cases) {
         localStorage:{audit:'new'}
       });
       const source = new Blob([payload]);
-      await runWanWanStreamImport(source, (pct, text) => {
+      await runWanWanStreamImport(source, pct => {
         if (pct === 100) console.log('WANWAN_SUCCESS_FEEDBACK');
-        const expected = {
-          'first-batch': 'messages（200',
-          'multiple-batches': 'messages（400',
-          'last-batch': 'messages（600',
-          'before-commit': 'imageBlobs（1',
-        }[phase];
-        if (expected && String(text).includes(expected)) {
-          signal();
-          // Synchronously stop app progress while allowing the external driver to
-          // close/refresh/kill. A pending IDB request prevents auto-commit.
-          active.waitFor(hold());
-          const until = performance.now() + 4000;
-          while (performance.now() < until) {}
-        }
       }, {clearBeforeImport:true});
     }, phase).catch(error => String(error));
     const timeout = new AbortController();

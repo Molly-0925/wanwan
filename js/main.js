@@ -437,6 +437,15 @@ window.startWanWanApp = async function() {
 
 // ===== 主入口 =====
 document.addEventListener('DOMContentLoaded', async function() {
+  try {
+    await waitForDB()
+    await window.recoverWanWanBackupImport()
+  } catch (error) {
+    console.error('[弯弯] 恢复备份状态失败:', error)
+    var status = document.querySelector('#splash-tap span')
+    if (status) status.textContent = '发现未完成的恢复，请重新打开应用'
+    return
+  }
   await loadWanWanAppIcon()
   registerWanWanServiceWorker()
 
