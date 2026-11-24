@@ -22,7 +22,7 @@
   }
   Reader.prototype.fill = async function() {
     if (this.pos < this.buffer.length || this.done) return
-    var r = await Dexie.waitFor(this.reader.read()); this.pos = 0
+    var r = await this.transaction.waitFor(this.reader.read()); this.pos = 0
     if (r.done) { this.done = true; this.buffer = this.decoder.decode() }
     else {
       this.bytes += r.value.byteLength; this.buffer = this.decoder.decode(r.value, { stream: true })
@@ -122,7 +122,7 @@
     return v
   }
 
-  async function put(name, rows) {
+  async function put(transaction, name, rows) {
     if (!rows.length || !db[name]) return
     if (name === 'config') rows = rows.filter(function(row) {
       return row && ['memoryEmbeddingStatus', 'memoryLastError'].indexOf(String(row.key)) < 0
@@ -132,7 +132,7 @@
       if (!Number.isFinite(source) || source <= 0 || (Number.isFinite(created) && created > 0 && source === created)) row.sourceAt = null
       return row
     })
-    if (rows.length) await db[name].bulkPut(rows)
+    if (rows.length) await transaction.table(name).bulkPut(rows)
   }
 
   function databaseError(err) {
@@ -145,10 +145,10 @@
     return name + '：' + message
   }
 
-  async function array(input, name, progress, options) {
+  async function array(input, name, progress, options, transaction) {
     await input.expect('['); await input.space()
     if (options.clearBeforeImport && db[name]) {
-      try { await db[name].clear() } catch (err) { throw new Error('清理 ' + name + ' 失败：' + databaseError(err)) }
+      try { await transaction.table(name).clear() } catch (err) { throw new Error('清理 ' + name + ' 失败：' + databaseError(err)) }
     }
     if (await input.peek() === ']') { await input.next(); return }
     var rows = [], count = 0, limit = name === 'imageBlobs' ? 1 : 200
@@ -156,7 +156,7 @@
       var encoded = await value(input)
       rows.push(hydrate(JSON.parse(encoded.raw), encoded.blobs)); count++
       if (rows.length >= limit) {
-        try { await put(name, rows) } catch (err) {
+        try { await put(transaction, name, rows) } catch (err) {
           throw new Error('写入 ' + name + ' 失败（第 ' + Math.max(1, count - rows.length + 1) + '-' + count + ' 条）：' + databaseError(err))
         }
         rows = []; progress(input.size ? Math.min(98, input.bytes / input.size * 100) : 0, '正在导入 ' + name + '（' + count + ' 条）')
@@ -165,7 +165,7 @@
       if (separator === ']') break
       if (separator !== ',') throw new Error(name + ' 数组格式错误')
     }
-    try { await put(name, rows) } catch (err) {
+    try { await put(transaction, name, rows) } catch (err) {
       throw new Error('写入 ' + name + ' 失败（共 ' + count + ' 条）：' + databaseError(err))
     }
   }
@@ -177,10 +177,10 @@
     var tables = TABLES.filter(function(name) { return !!db[name] }).map(function(name) { return db[name] })
     var previous = new Map()
     try {
-      await db.transaction('rw', tables, async function() {
-        var local = await work()
+      await db.transaction('rw', tables, async function(transaction) {
+        var local = await work(transaction)
         if (Array.isArray(options.preserveConfigRows) && options.preserveConfigRows.length && db.config) {
-          await db.config.bulkPut(options.preserveConfigRows)
+          await transaction.table('config').bulkPut(options.preserveConfigRows)
         }
         var keys = new Set(Object.keys(local || {}))
         if (options.clearBeforeImport) Object.keys(localStorage).forEach(function(key) { keys.add(key) })
@@ -214,14 +214,15 @@
     options = options || {}
     var input = new Reader(source, progress), version = null, appName = null, local = null
     try {
-      await window.runWanWanBackupTransaction(async function() {
+      await window.runWanWanBackupTransaction(async function(transaction) {
+        input.transaction = transaction
         await input.expect('{')
         while (true) {
           await input.space(); if (await input.peek() === '}') { await input.next(); break }
           var key = (await stringToken(input)).value; await input.expect(':')
           if (TABLES.indexOf(key) >= 0) {
             if (version !== 1 || appName !== '弯弯') throw new Error('备份头部无效或字段顺序不受支持')
-            await array(input, key, progress, options)
+            await array(input, key, progress, options, transaction)
           } else {
             var encoded = await value(input), decoded = hydrate(JSON.parse(encoded.raw), encoded.blobs)
             if (key === 'version') version = decoded

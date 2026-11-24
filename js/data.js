@@ -868,7 +868,7 @@ window.importBackupData = async function(data, onProgress, options) {
   validateBackupData(data)
   options = options || {}
   var report = typeof onProgress === 'function' ? onProgress : function() {}
-  await window.runWanWanBackupTransaction(async function() {
+  await window.runWanWanBackupTransaction(async function(transaction) {
     if (options.clearBeforeImport) {
       report(5, '清理本机数据...')
       var tables = ['config', 'characters', 'chats', 'messages',
@@ -876,33 +876,33 @@ window.importBackupData = async function(data, onProgress, options) {
         'stickers', 'stickerCategories', 'memories', 'memoryRuns', 'callRecords',
         'smsConversations', 'smsMessages', 'imageBlobs', 'doorModules', 'doorResults',
         'avgSaves', 'avgConfigs', 'mcpServers', 'mcpToolTraces']
-      await Promise.all(tables.map(function(name) { return db[name] ? db[name].clear() : Promise.resolve() }))
+      await Promise.all(tables.map(function(name) { return db[name] ? transaction.table(name).clear() : Promise.resolve() }))
     }
     report(10, '导入配置...')
     if (data.config) {
       var configRows = filterBackupConfigRows(deserializeBlobs(data.config))
-      if (configRows.length) await db.config.bulkPut(configRows)
+      if (configRows.length) await transaction.table('config').bulkPut(configRows)
     }
   
     report(25, '导入角色...')
-    if (data.characters) await db.characters.bulkPut(data.characters)
+    if (data.characters) await transaction.table('characters').bulkPut(data.characters)
   
     report(45, '导入聊天...')
-    if (data.chats) await db.chats.bulkPut(data.chats)
-    if (data.messages) await db.messages.bulkPut(data.messages)
+    if (data.chats) await transaction.table('chats').bulkPut(data.chats)
+    if (data.messages) await transaction.table('messages').bulkPut(data.messages)
   
     report(60, '导入群聊...')
-    if (data.groupChats) await db.groupChats.bulkPut(data.groupChats)
-    if (data.groupMessages) await db.groupMessages.bulkPut(data.groupMessages)
+    if (data.groupChats) await transaction.table('groupChats').bulkPut(data.groupChats)
+    if (data.groupMessages) await transaction.table('groupMessages').bulkPut(data.groupMessages)
   
     report(75, '导入动态...')
-    if (data.moments) await db.moments.bulkPut(data.moments)
-    if (data.finance) await db.finance.bulkPut(data.finance)
+    if (data.moments) await transaction.table('moments').bulkPut(data.moments)
+    if (data.finance) await transaction.table('finance').bulkPut(data.finance)
   
     report(82, '导入缓存...')
-    if (data.offlineChats) await db.offlineChats.bulkPut(data.offlineChats)
-    if (data.stickers) await db.stickers.bulkPut(data.stickers)
-    if (data.stickerCategories) await db.stickerCategories.bulkPut(data.stickerCategories)
+    if (data.offlineChats) await transaction.table('offlineChats').bulkPut(data.offlineChats)
+    if (data.stickers) await transaction.table('stickers').bulkPut(data.stickers)
+    if (data.stickerCategories) await transaction.table('stickerCategories').bulkPut(data.stickerCategories)
     if (data.memories && db.memories) {
       var normalizedMemories = data.memories.map(function(memory) {
         var row = Object.assign({}, memory)
@@ -912,21 +912,21 @@ window.importBackupData = async function(data, onProgress, options) {
             (Number.isFinite(createdAt) && createdAt > 0 && sourceAt === createdAt)) row.sourceAt = null
         return row
       })
-      await db.memories.bulkPut(normalizedMemories)
+      await transaction.table('memories').bulkPut(normalizedMemories)
     }
-    if (data.memoryRuns && db.memoryRuns) await db.memoryRuns.bulkPut(data.memoryRuns)
+    if (data.memoryRuns && db.memoryRuns) await transaction.table('memoryRuns').bulkPut(data.memoryRuns)
   
     report(86, '导入通话/短信/图片/任意门/游戏存档/MCP...')
-    if (data.callRecords && db.callRecords) await db.callRecords.bulkPut(data.callRecords)
-    if (data.smsConversations && db.smsConversations) await db.smsConversations.bulkPut(data.smsConversations)
-    if (data.smsMessages && db.smsMessages) await db.smsMessages.bulkPut(data.smsMessages)
-    if (data.imageBlobs && db.imageBlobs) await db.imageBlobs.bulkPut(deserializeBlobs(data.imageBlobs))
-    if (Array.isArray(data.doorModules) && db.doorModules) await db.doorModules.bulkPut(data.doorModules)
-    if (Array.isArray(data.doorResults) && db.doorResults) await db.doorResults.bulkPut(data.doorResults)
-    if (Array.isArray(data.avgSaves) && db.avgSaves) await db.avgSaves.bulkPut(data.avgSaves)
-    if (Array.isArray(data.avgConfigs) && db.avgConfigs) await db.avgConfigs.bulkPut(data.avgConfigs)
-    if (Array.isArray(data.mcpServers) && db.mcpServers) await db.mcpServers.bulkPut(data.mcpServers)
-    if (Array.isArray(data.mcpToolTraces) && db.mcpToolTraces) await db.mcpToolTraces.bulkPut(data.mcpToolTraces)
+    if (data.callRecords && db.callRecords) await transaction.table('callRecords').bulkPut(data.callRecords)
+    if (data.smsConversations && db.smsConversations) await transaction.table('smsConversations').bulkPut(data.smsConversations)
+    if (data.smsMessages && db.smsMessages) await transaction.table('smsMessages').bulkPut(data.smsMessages)
+    if (data.imageBlobs && db.imageBlobs) await transaction.table('imageBlobs').bulkPut(deserializeBlobs(data.imageBlobs))
+    if (Array.isArray(data.doorModules) && db.doorModules) await transaction.table('doorModules').bulkPut(data.doorModules)
+    if (Array.isArray(data.doorResults) && db.doorResults) await transaction.table('doorResults').bulkPut(data.doorResults)
+    if (Array.isArray(data.avgSaves) && db.avgSaves) await transaction.table('avgSaves').bulkPut(data.avgSaves)
+    if (Array.isArray(data.avgConfigs) && db.avgConfigs) await transaction.table('avgConfigs').bulkPut(data.avgConfigs)
+    if (Array.isArray(data.mcpServers) && db.mcpServers) await transaction.table('mcpServers').bulkPut(data.mcpServers)
+    if (Array.isArray(data.mcpToolTraces) && db.mcpToolTraces) await transaction.table('mcpToolTraces').bulkPut(data.mcpToolTraces)
     return data.localStorage
   }, options)
   report(100, '导入完成！')
