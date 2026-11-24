@@ -22,6 +22,11 @@ jobs:
       - run: node .github/tests/import-multitab.mjs
       - run: node .github/tests/import-regression.mjs
       - run: node .github/tests/import-crash.mjs
+      - name: Verify the same-origin PWA upgrade
+        run: |
+          mkdir .wanwan-baseline
+          git archive c805adc7ddb4955811cce67d9edf7bbed496a9dd | tar -x -C .wanwan-baseline
+          node .github/tests/pwa-upgrade.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
