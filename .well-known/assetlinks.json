@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "io.github.molly0925.wanwan",
+      "sha256_cert_fingerprints": [
+        "0F:59:87:34:DF:B4:DA:41:55:F7:F5:A6:FA:08:F1:CF:5D:F1:F9:86:1B:8F:F8:22:82:1F:8B:FC:FD:E2:B2:86"
+      ]
+    }
+  }
+]
