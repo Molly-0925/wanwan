@@ -230,6 +230,7 @@
     options = options || {}
     await withImportLock(async function() {
       await reconcileBackupImport()
+      var snapshot = await window.readWanWanBackupWriteVersion(db.backupImportRecovery)
       var plan
       try {
         // Validate and stage the whole file before touching any live table.
@@ -242,6 +243,7 @@
         var tables = TABLES.filter(function(name) { return !!db[name] }).map(function(name) { return db[name] })
         tables.push(db.backupImportStage, db.backupImportRecovery)
         await db.transaction('rw', tables, async function(transaction) {
+          await window.authorizeWanWanBackupCommit(transaction, snapshot, plan.id)
           var stage = transaction.table('backupImportStage')
           var cursor = 0
           while (true) {
@@ -269,7 +271,7 @@
     return withImportLock(async function() {
       await reconcileBackupImport()
       // Let the caller clear its live rows and marker under the same lock.
-      await db.backupImportRecovery.clear()
+      await db.backupImportRecovery.delete(RECOVERY_KEY)
       await work()
     })
   }

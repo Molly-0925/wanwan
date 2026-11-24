@@ -12,11 +12,13 @@ try {
   }));
   await page.goto('https://wanwan-audit.test/');
   await page.addScriptTag({ path: require.resolve('dexie/dist/dexie.js') });
+  await page.addScriptTag({ path: resolve('js/backup-write-guard.js') });
   await page.addScriptTag({ path: resolve('js/data.js') });
   await page.addScriptTag({ path: resolve('js/data-stream.js') });
   await page.evaluate(async () => {
     const db = window.db = new Dexie('wanwan-isolated-test');
     db.version(1).stores({ config: 'key', characters: 'id', messages: 'id', imageBlobs: 'id', backupImportStage: '++id', backupImportRecovery: 'key' });
+    installWanWanBackupWriteGuard(db);
     await db.open();
     await db.characters.put({ id: 1, name: 'original' });
     localStorage.setItem('audit', 'original');

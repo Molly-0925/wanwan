@@ -18,12 +18,14 @@ const payload = name => ({
 async function open(page) {
   await page.goto('https://wanwan-audit.test/');
   await page.addScriptTag({ path: require.resolve('dexie/dist/dexie.js') });
+  await page.addScriptTag({ path: resolve('js/backup-write-guard.js') });
   await page.addScriptTag({ path: resolve('js/data.js') });
   await page.addScriptTag({ path: resolve('js/data-stream.js') });
   await page.evaluate(async () => {
     window.db = new Dexie('wanwan-multitab-audit');
     db.version(1).stores({config:'key', characters:'id', chats:'id', messages:'id',
       backupImportStage:'++id',backupImportRecovery:'key'});
+    installWanWanBackupWriteGuard(db);
     await db.open();
   });
 }

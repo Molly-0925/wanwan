@@ -339,6 +339,7 @@ function initDB() {
     backupImportStage: '++id',
     backupImportRecovery: 'key'
   })
+  window.installWanWanBackupWriteGuard(db)
   installWanWanDBRecovery()
 }
 

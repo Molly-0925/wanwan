@@ -12,6 +12,7 @@ const require = createRequire(import.meta.url);
 const scripts = new Map(await Promise.all([
   ['/dexie.js', require.resolve('dexie/dist/dexie.js')],
   ['/data.js', resolve('js/data.js')],
+  ['/backup-write-guard.js', resolve('js/backup-write-guard.js')],
   ['/data-stream.js', resolve('js/data-stream.js')],
 ].map(async ([url, path]) => [url, await readFile(path)])));
 const server = createServer((req, res) => {
@@ -20,7 +21,7 @@ const server = createServer((req, res) => {
     res.end(scripts.get(req.url));
   } else {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end('<!doctype html><meta charset="utf-8"><script src="/dexie.js"></script><script src="/data.js"></script><script src="/data-stream.js"></script>');
+    res.end('<!doctype html><meta charset="utf-8"><script src="/dexie.js"></script><script src="/backup-write-guard.js"></script><script src="/data.js"></script><script src="/data-stream.js"></script>');
   }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -61,6 +62,7 @@ async function open(page) {
   await page.evaluate(async () => {
     window.db = new Dexie('wanwan-crash-audit');
     db.version(1).stores({config:'key', characters:'id', chats:'id', messages:'id', imageBlobs:'id',backupImportStage:'++id',backupImportRecovery:'key'});
+    installWanWanBackupWriteGuard(db);
     await db.open();
     await recoverWanWanBackupImport();
   });
@@ -133,6 +135,7 @@ for (const [phase, termination] of cases) {
             if (phase === 'before-commit' && name === 'backupImportRecovery') {
               const write = bound.put.bind(bound);
               bound.put = record => {
+                if (record.key !== 'current') return write(record);
                 signal();
                 return tx.waitFor(hold()).then(() => write(record));
               };
