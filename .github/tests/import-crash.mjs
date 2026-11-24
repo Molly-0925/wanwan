@@ -110,9 +110,12 @@ for (const [phase, termination] of cases) {
         const result = await orig(mode, tables, async tx => {
           active = tx;
           let messagesWritten = 0;
+          const instrumented = new WeakSet();
           const table = tx.table.bind(tx);
           tx.table = name => {
             const bound = table(name);
+            if (instrumented.has(bound)) return bound;
+            instrumented.add(bound);
             if (name === 'characters' || name === 'messages') {
               const write = bound.bulkPut.bind(bound);
               bound.bulkPut = rows => {
