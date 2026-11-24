@@ -72,6 +72,8 @@ const cases = [
   ['first-batch','reload'], ['multiple-batches','close'],
 ];
 const results = [];
+console.log('Crash test revision:', process.env.GITHUB_SHA || 'local');
+console.log('Isolation: dedicated Chrome process group and clean profile per case.');
 try {
 for (const [phase, termination] of cases) {
   const profile = join(root, phase + '-' + termination);
