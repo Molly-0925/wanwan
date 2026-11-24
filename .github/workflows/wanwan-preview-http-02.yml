@@ -1,0 +1,19 @@
+name: WANWAN HTTPS preview probe
+on:
+  push:
+    branches: [wanwan-deploy-02-crash-candidate]
+    paths: ['.github/workflows/wanwan-preview-http-02.yml']
+permissions: {}
+jobs:
+  read-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - name: Compare anonymous preview and production responses
+        run: |
+          for origin in https://deploy-preview-1--molly-wanwan.netlify.app https://molly-wanwan.netlify.app; do
+            for path in / /manifest.json /js/backup-write-guard.js /img/wanwan-512.png /service.js /.well-known/assetlinks.json; do
+              printf '%s ' "${origin}${path}"
+              curl --silent --show-error --max-time 12 -o /dev/null -w 'HTTP %{http_code} | %{content_type}\n' "${origin}${path}" || true
+            done
+          done
