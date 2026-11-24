@@ -868,94 +868,68 @@ window.importBackupData = async function(data, onProgress, options) {
   validateBackupData(data)
   options = options || {}
   var report = typeof onProgress === 'function' ? onProgress : function() {}
-  var savedProtectedStorage = null
-
-  if (options.clearBeforeImport) {
-    report(5, '清理本机数据...')
-    savedProtectedStorage = collectProtectedLocalStorage()
-    await clearAppDataForImport()
-    await yieldMain()
-  }
-
-  report(10, '导入配置...')
-  if (data.config) {
-    var configRows = filterBackupConfigRows(deserializeBlobs(data.config))
-    if (configRows.length) await db.config.bulkPut(configRows)
-  }
-  await yieldMain()
-
-  report(25, '导入角色...')
-  if (data.characters) await db.characters.bulkPut(data.characters)
-  await yieldMain()
-
-  report(45, '导入聊天...')
-  if (data.chats) await db.chats.bulkPut(data.chats)
-  if (data.messages) await db.messages.bulkPut(data.messages)
-  await yieldMain()
-
-  report(60, '导入群聊...')
-  if (data.groupChats) await db.groupChats.bulkPut(data.groupChats)
-  if (data.groupMessages) await db.groupMessages.bulkPut(data.groupMessages)
-  await yieldMain()
-
-  report(75, '导入动态...')
-  if (data.moments) await db.moments.bulkPut(data.moments)
-  if (data.finance) await db.finance.bulkPut(data.finance)
-  await yieldMain()
-
-  report(82, '导入缓存...')
-  if (data.offlineChats) await db.offlineChats.bulkPut(data.offlineChats)
-  if (data.stickers) await db.stickers.bulkPut(data.stickers)
-  if (data.stickerCategories) await db.stickerCategories.bulkPut(data.stickerCategories)
-  if (data.memories && db.memories) {
-    var normalizedMemories = data.memories.map(function(memory) {
-      var row = Object.assign({}, memory)
-      var sourceAt = Number(row.sourceAt)
-      var createdAt = Number(row.createdAt)
-      if (!Number.isFinite(sourceAt) || sourceAt <= 0 ||
-          (Number.isFinite(createdAt) && createdAt > 0 && sourceAt === createdAt)) row.sourceAt = null
-      return row
-    })
-    await db.memories.bulkPut(normalizedMemories)
-  }
-  if (data.memoryRuns && db.memoryRuns) await db.memoryRuns.bulkPut(data.memoryRuns)
-  await yieldMain()
-
-  report(86, '导入通话/短信/图片/任意门/游戏存档/MCP...')
-  if (data.callRecords && db.callRecords) await db.callRecords.bulkPut(data.callRecords)
-  if (data.smsConversations && db.smsConversations) await db.smsConversations.bulkPut(data.smsConversations)
-  if (data.smsMessages && db.smsMessages) await db.smsMessages.bulkPut(data.smsMessages)
-  if (data.imageBlobs && db.imageBlobs) await db.imageBlobs.bulkPut(deserializeBlobs(data.imageBlobs))
-  if (Array.isArray(data.doorModules) && db.doorModules) await db.doorModules.bulkPut(data.doorModules)
-  if (Array.isArray(data.doorResults) && db.doorResults) await db.doorResults.bulkPut(data.doorResults)
-  if (Array.isArray(data.avgSaves) && db.avgSaves) await db.avgSaves.bulkPut(data.avgSaves)
-  if (Array.isArray(data.avgConfigs) && db.avgConfigs) await db.avgConfigs.bulkPut(data.avgConfigs)
-  if (Array.isArray(data.mcpServers) && db.mcpServers) await db.mcpServers.bulkPut(data.mcpServers)
-  if (Array.isArray(data.mcpToolTraces) && db.mcpToolTraces) await db.mcpToolTraces.bulkPut(data.mcpToolTraces)
-  await yieldMain()
-
-  report(90, '恢复本地存储...')
-  if (data.localStorage) {
-    var entries = Object.entries(data.localStorage)
-    for (var i = 0; i < entries.length; i++) {
-      if (isProtectedLocalStorageKey(entries[i][0])) continue
-      localStorage.setItem(entries[i][0], entries[i][1])
+  await window.runWanWanBackupTransaction(async function() {
+    if (options.clearBeforeImport) {
+      report(5, '清理本机数据...')
+      var tables = ['config', 'characters', 'chats', 'messages',
+        'groupChats', 'groupMessages', 'moments', 'finance', 'offlineChats',
+        'stickers', 'stickerCategories', 'memories', 'memoryRuns', 'callRecords',
+        'smsConversations', 'smsMessages', 'imageBlobs', 'doorModules', 'doorResults',
+        'avgSaves', 'avgConfigs', 'mcpServers', 'mcpToolTraces']
+      await Promise.all(tables.map(function(name) { return db[name] ? db[name].clear() : Promise.resolve() }))
     }
-  }
-  if (savedProtectedStorage) restoreProtectedLocalStorage(savedProtectedStorage)
-
+    report(10, '导入配置...')
+    if (data.config) {
+      var configRows = filterBackupConfigRows(deserializeBlobs(data.config))
+      if (configRows.length) await db.config.bulkPut(configRows)
+    }
+  
+    report(25, '导入角色...')
+    if (data.characters) await db.characters.bulkPut(data.characters)
+  
+    report(45, '导入聊天...')
+    if (data.chats) await db.chats.bulkPut(data.chats)
+    if (data.messages) await db.messages.bulkPut(data.messages)
+  
+    report(60, '导入群聊...')
+    if (data.groupChats) await db.groupChats.bulkPut(data.groupChats)
+    if (data.groupMessages) await db.groupMessages.bulkPut(data.groupMessages)
+  
+    report(75, '导入动态...')
+    if (data.moments) await db.moments.bulkPut(data.moments)
+    if (data.finance) await db.finance.bulkPut(data.finance)
+  
+    report(82, '导入缓存...')
+    if (data.offlineChats) await db.offlineChats.bulkPut(data.offlineChats)
+    if (data.stickers) await db.stickers.bulkPut(data.stickers)
+    if (data.stickerCategories) await db.stickerCategories.bulkPut(data.stickerCategories)
+    if (data.memories && db.memories) {
+      var normalizedMemories = data.memories.map(function(memory) {
+        var row = Object.assign({}, memory)
+        var sourceAt = Number(row.sourceAt)
+        var createdAt = Number(row.createdAt)
+        if (!Number.isFinite(sourceAt) || sourceAt <= 0 ||
+            (Number.isFinite(createdAt) && createdAt > 0 && sourceAt === createdAt)) row.sourceAt = null
+        return row
+      })
+      await db.memories.bulkPut(normalizedMemories)
+    }
+    if (data.memoryRuns && db.memoryRuns) await db.memoryRuns.bulkPut(data.memoryRuns)
+  
+    report(86, '导入通话/短信/图片/任意门/游戏存档/MCP...')
+    if (data.callRecords && db.callRecords) await db.callRecords.bulkPut(data.callRecords)
+    if (data.smsConversations && db.smsConversations) await db.smsConversations.bulkPut(data.smsConversations)
+    if (data.smsMessages && db.smsMessages) await db.smsMessages.bulkPut(data.smsMessages)
+    if (data.imageBlobs && db.imageBlobs) await db.imageBlobs.bulkPut(deserializeBlobs(data.imageBlobs))
+    if (Array.isArray(data.doorModules) && db.doorModules) await db.doorModules.bulkPut(data.doorModules)
+    if (Array.isArray(data.doorResults) && db.doorResults) await db.doorResults.bulkPut(data.doorResults)
+    if (Array.isArray(data.avgSaves) && db.avgSaves) await db.avgSaves.bulkPut(data.avgSaves)
+    if (Array.isArray(data.avgConfigs) && db.avgConfigs) await db.avgConfigs.bulkPut(data.avgConfigs)
+    if (Array.isArray(data.mcpServers) && db.mcpServers) await db.mcpServers.bulkPut(data.mcpServers)
+    if (Array.isArray(data.mcpToolTraces) && db.mcpToolTraces) await db.mcpToolTraces.bulkPut(data.mcpToolTraces)
+    return data.localStorage
+  }, options)
   report(100, '导入完成！')
-}
-
-// ===== 同步下载覆盖前清理应用数据 =====
-async function clearAppDataForImport() {
-  var tables = ['config', 'characters', 'chats', 'messages',
-    'groupChats', 'groupMessages', 'moments', 'finance', 'offlineChats',
-    'stickers', 'stickerCategories', 'memories', 'memoryRuns',
-    'callRecords', 'smsConversations', 'smsMessages', 'imageBlobs',
-    'doorModules', 'doorResults', 'avgSaves', 'avgConfigs', 'mcpServers', 'mcpToolTraces']
-  await Promise.all(tables.map(function(t) { return db[t] ? db[t].clear() : Promise.resolve() }))
-  localStorage.clear()
 }
 
 // ===== 校验备份格式 =====

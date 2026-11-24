@@ -17,6 +17,9 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.14.3'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
       - name: Resolve Android SDK and build unsigned APK
         run: |
           sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
@@ -28,3 +31,14 @@ jobs:
         with:
           name: wanwan-twa-compile-probe-unsigned
           path: android/app/build/outputs/apk/release/app-release-unsigned.apk*
+  import-atomicity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-save --no-package-lock dexie@4.4.3 playwright@1.56.1
+      - run: npx playwright install --with-deps chromium
+      - run: node .github/tests/import-atomicity.mjs
