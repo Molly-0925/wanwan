@@ -104,6 +104,12 @@ function updateWanWanHeadIcon(rel, id, href, type) {
 
 // ===== 动态注入PWA manifest =====
 function injectManifest(settings) {
+  if (settings.type === 'preset' && settings.preset === 'wanwan') {
+    document.getElementById('app-manifest').href = new URL('manifest.json', document.baseURI).href
+    if (_wanwanManifestObjectUrl) URL.revokeObjectURL(_wanwanManifestObjectUrl)
+    _wanwanManifestObjectUrl = ''
+    return
+  }
   var icons = getWanWanAppIconSources(settings)
   var appRoot = new URL('./', document.baseURI).href
   var manifest = {
