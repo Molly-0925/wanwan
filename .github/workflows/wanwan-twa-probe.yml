@@ -23,14 +23,14 @@ jobs:
       - name: Resolve Android SDK and build unsigned APK
         run: |
           sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
-          gradle -p android --no-daemon :app:assembleRelease -PwanwanOrigin=https://wanwan-build-probe.invalid
+          gradle -p android --no-daemon :app:assembleRelease -PwanwanOrigin=https://molly-wanwan.netlify.app
           apk=android/app/build/outputs/apk/release/app-release-unsigned.apk
           test -s "$apk"
           sha256sum "$apk" | tee "$apk.sha256"
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" | grep -E "^(package:|application-label:)";
       - uses: actions/upload-artifact@v4
         with:
-          name: wanwan-twa-compile-probe-unsigned
+          name: wanwan-twa-molly-wanwan-unsigned
           path: android/app/build/outputs/apk/release/app-release-unsigned.apk*
   import-atomicity:
     runs-on: ubuntu-24.04
