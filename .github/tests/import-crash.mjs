@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -28,13 +28,16 @@ const url = 'http://127.0.0.1:' + server.address().port;
 const root = await mkdtemp(join(tmpdir(), 'wanwan-crash-'));
 
 async function launch(profile) {
+  await mkdir(profile, {recursive:true});
+  let diagnostic = '';
   const proc = spawn('google-chrome', [
-    '--headless=new', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage',
+    '--headless', '--no-sandbox', '--no-first-run', '--disable-dev-shm-usage', '--disable-gpu',
     '--remote-debugging-port=0', '--user-data-dir=' + profile, 'about:blank',
-  ], { stdio: 'ignore', detached: true });
+  ], { stdio: ['ignore','ignore','pipe'], detached: true });
+  proc.stderr.on('data', bytes => { diagnostic = (diagnostic + bytes).slice(-6500); });
   const exited = new Promise(resolve => proc.once('exit', resolve));
   try {
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 160 && proc.exitCode === null; i++) {
       const port = await readFile(join(profile, 'DevToolsActivePort'), 'utf8').catch(() => '');
       if (port) {
         const browser = await chromium.connectOverCDP('http://127.0.0.1:' + port.split('\n')[0]);
@@ -42,11 +45,12 @@ async function launch(profile) {
           process.kill(-proc.pid, 'SIGKILL');
           await exited;
           await rm(join(profile, 'DevToolsActivePort'), { force: true });
+          for (const name of ['SingletonLock','SingletonSocket','SingletonCookie']) await rm(join(profile,name),{force:true});
         } };
       }
       await delay(75);
     }
-    throw Error('Chrome did not start');
+    throw Error('Chrome did not start (' + proc.exitCode + '): ' + diagnostic);
   } catch (e) {
     if (proc.exitCode === null) process.kill(-proc.pid, 'SIGKILL');
     throw e;
