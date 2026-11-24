@@ -6,7 +6,7 @@ permissions:
   contents: read
 jobs:
   unsigned:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -26,13 +26,14 @@ jobs:
           gradle -p android --no-daemon :app:assembleRelease -PwanwanOrigin=https://wanwan-build-probe.invalid
           apk=android/app/build/outputs/apk/release/app-release-unsigned.apk
           test -s "$apk"
-          sha256sum "$apk" > "$apk.sha256"
+          sha256sum "$apk" | tee "$apk.sha256"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" | grep -E "^(package:|application-label:)";
       - uses: actions/upload-artifact@v4
         with:
           name: wanwan-twa-compile-probe-unsigned
           path: android/app/build/outputs/apk/release/app-release-unsigned.apk*
   import-atomicity:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
