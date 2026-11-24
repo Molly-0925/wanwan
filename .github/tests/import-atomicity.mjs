@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 
 const require = createRequire(import.meta.url);
-const browser = await chromium.launch();
+const browser = await chromium.launch({ channel: 'chrome' });
 try {
   const page = await browser.newPage();
   await page.route('https://wanwan-audit.test/', route => route.fulfill({
