@@ -1,7 +1,7 @@
 name: WANWAN DEPLOY 02 crash gate
 on:
   push:
-    branches: [wanwan-deploy-02-crash-candidate]
+    branches: [wanwan-deploy-02-crash-recovery]
 permissions:
   contents: read
 jobs:
