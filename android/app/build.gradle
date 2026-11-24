@@ -1,0 +1,35 @@
+plugins {
+    id 'com.android.application' version '8.13.0'
+}
+
+def origin = providers.gradleProperty('wanwanOrigin').orElse('').get()
+def uri = new URI(origin)
+if (uri.scheme != 'https' || !uri.host || uri.userInfo || uri.port != -1 ||
+        uri.rawQuery || uri.rawFragment || !(uri.rawPath in ['', '/'])) {
+    throw new GradleException('Set -PwanwanOrigin to the verified production HTTPS origin.')
+}
+def siteOrigin = "https://${uri.host}"
+def statement = groovy.json.JsonOutput.toJson([[
+    relation: ['delegate_permission/common.handle_all_urls'],
+    target: [namespace: 'web', site: siteOrigin]
+]])
+
+android {
+    namespace 'io.github.molly0925.wanwan'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'io.github.molly0925.wanwan'
+        minSdk 23
+        targetSdk 35
+        versionCode providers.gradleProperty('wanwanVersionCode').orElse('1').get().toInteger()
+        versionName providers.gradleProperty('wanwanVersionName').orElse('1.0.0').get()
+        manifestPlaceholders = [siteHost: uri.host]
+        resValue 'string', 'launch_url', "${siteOrigin}/"
+        resValue 'string', 'asset_statements', statement.replace('"', '\\"')
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.7.0'
+}
